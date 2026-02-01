@@ -1,4 +1,4 @@
-name: LSPatch LINE (Complete Local Roll Fix)
+name: LSPatch LINE
 
 on:
   workflow_dispatch:
