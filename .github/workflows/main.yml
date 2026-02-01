@@ -106,7 +106,7 @@ jobs:
           name: LINE ${{ github.event.inputs.version }} (Local Roll)
           body: |
             ### Patch Info
-            - **Mode:** Local (Fixed)
+            - **Mode:** Local
             - **Method:** Roll (Inject Dex)
             - **Tool:** JingMatrix LSPatch with Manager injection
           files: |
