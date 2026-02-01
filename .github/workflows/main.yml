@@ -103,10 +103,12 @@ jobs:
           tag_name: v${{ github.event.inputs.version }}
           name: LINE ${{ github.event.inputs.version }} (Inject Dex)
           body: |
-            - Mode: Local (Inject Dex)
-            - Tool: JingMatrix LSPatch
-            - Merged from APKM
-          files: signed_final.apk
+            - **Mode:** Local (Inject Dex)
+            - **Tool:** JingMatrix LSPatch
+            - **Status:** Merged & Signed
+          # ファイル名を LINE-バージョン-Patched.apk にリネームしてアップロード
+          files: |
+            signed_final.apk:LINE-${{ github.event.inputs.version }}-Patched.apk
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
