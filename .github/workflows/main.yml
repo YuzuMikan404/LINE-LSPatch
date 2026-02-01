@@ -1,0 +1,122 @@
+name: LSPatch LINE
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'LINEのバージョン (例: 14.1.1)'
+        required: true
+
+env:
+  # ▼▼▼ ここに参照元のリポジトリ名 (ユーザー名/リポジトリ名) を記述してください ▼▼▼
+  SOURCE_REPO: "YuzuMikan404/LINE-APK"
+
+jobs:
+  patch-remote-fixed:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Download Tools
+        run: |
+          # LSPatch Manager
+          LSPATCH_URL=$(curl -s https://api.github.com/repos/LSPosed/LSPatch/releases/latest | grep "browser_download_url.*manager.jar" | cut -d '"' -f 4)
+          wget -O lspatch.jar "$LSPATCH_URL"
+
+          # APKEditor (APKM結合用)
+          APKEDITOR_URL=$(curl -s https://api.github.com/repos/REAndroid/APKEditor/releases/latest | grep "browser_download_url.*.jar" | cut -d '"' -f 4)
+          wget -O APKEditor.jar "$APKEDITOR_URL"
+
+      - name: Download APK from Source Repo
+        id: download_apk
+        env:
+          # 参照元がPrivateリポジトリの場合は、ここを ${{ secrets.PAT }} などに変更する必要があります
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event.inputs.version }}
+        run: |
+          echo "Fetching APK for version $VERSION from $SOURCE_REPO..."
+          mkdir download_tmp
+
+          # タグ名が "v14.1.1" か "14.1.1" か両方試してダウンロード
+          # ファイル名にバージョン番号が含まれるファイルを対象にします
+          
+          if gh release download "v$VERSION" --repo "$SOURCE_REPO" --pattern "*$VERSION*" --dir download_tmp; then
+            echo "Downloaded from tag v$VERSION"
+          elif gh release download "$VERSION" --repo "$SOURCE_REPO" --pattern "*$VERSION*" --dir download_tmp; then
+            echo "Downloaded from tag $VERSION"
+          else
+            echo "Error: Could not find release tag 'v$VERSION' or '$VERSION' in repo '$SOURCE_REPO'."
+            exit 1
+          fi
+
+          # ダウンロードしたファイルを特定 (apk, apkm, xapk, apks)
+          FILE_PATH=$(find download_tmp -type f \( -name "*.apk" -o -name "*.apkm" -o -name "*.xapk" -o -name "*.apks" \) | head -n 1)
+          
+          if [ -z "$FILE_PATH" ]; then
+            echo "Error: No matching APK files found in the release."
+            exit 1
+          fi
+
+          echo "Found file: $FILE_PATH"
+          
+          # ファイルを作業ルートに移動
+          mv "$FILE_PATH" raw_input_file
+          
+          # 拡張子判定用に元のファイル名を環境変数に保存
+          echo "ORIGINAL_FILENAME=$(basename "$FILE_PATH")" >> $GITHUB_ENV
+
+      - name: Prepare APK (Merge if needed)
+        run: |
+          FILENAME="${{ env.ORIGINAL_FILENAME }}"
+          echo "Processing: $FILENAME"
+
+          # 拡張子がAPKM/APKS/XAPKなら結合、APKならそのまま
+          if [[ "$FILENAME" == *".apkm"* || "$FILENAME" == *".apks"* || "$FILENAME" == *".xapk"* ]]; then
+            echo "--- Split APK detected. Merging... ---"
+            unzip -o raw_input_file -d splitted_apk
+            java -jar APKEditor.jar m -i splitted_apk -o target.apk
+            echo "--- Merge complete ---"
+          else
+            echo "--- Standard APK detected. Using directly... ---"
+            mv raw_input_file target.apk
+          fi
+
+      - name: Run LSPatch (Local Mode)
+        run: |
+          # -l: Localモード (Manager依存・モジュール埋め込みなし)
+          java -jar lspatch.jar target.apk -l -f
+
+      - name: Sign APK
+        uses: r0adkll/sign-android-release@v1
+        id: sign_app
+        with:
+          releaseDirectory: .
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.ALIAS }}
+          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
+        env:
+          BUILD_TOOLS_VERSION: "34.0.0"
+
+      - name: Rename Output
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          mv target-lspatched-signed.apk LINE-${VERSION}-LocalPatched.apk
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: local-${{ github.event.inputs.version }}-${{ github.run_id }}
+          name: LINE ${{ github.event.inputs.version }} (Local Patched)
+          files: LINE-${{ github.event.inputs.version }}-LocalPatched.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
