@@ -4,10 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'LINEのバージョンを入力 (例: 14.1.1)'
+        description: 'LINEのバージョン (例: 14.1.1)'
         required: true
 
 env:
+  # ▼▼▼ 設定エリア (ここを書き換えてください) ▼▼▼
   
   # 1. APK(APKM)を置いてある外部リポジトリ (ユーザー名/リポジトリ名)
   SOURCE_REPO: "YuzuMikan404/LINE-APK"
@@ -23,12 +24,14 @@ env:
   
   # 5. キーのパスワード
   KEY_PASSWORD: "your_store_password"
+  
+  # ▲▲▲ 設定エリア終了 ▲▲▲
 
 jobs:
-  patch-hardcoded:
+  patch-jingmatrix:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # リリース作成に必要
+      contents: write
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -41,25 +44,31 @@ jobs:
 
       - name: Download Tools
         run: |
-          # LSPatch Manager
-          LSPATCH_URL=$(curl -s https://api.github.com/repos/LSPosed/LSPatch/releases/latest | grep "browser_download_url.*manager.jar" | cut -d '"' -f 4)
+          # JingMatrix/LSPatch から最新の .jar を取得
+          # APIから "browser_download_url" を検索し、末尾が .jar のものを取得
+          LSPATCH_URL=$(curl -s https://api.github.com/repos/JingMatrix/LSPatch/releases/latest | grep "browser_download_url.*.jar" | head -n 1 | cut -d '"' -f 4)
+          
+          if [ -z "$LSPATCH_URL" ]; then
+            echo "Error: Could not find .jar asset in JingMatrix/LSPatch releases."
+            exit 1
+          fi
+          
+          echo "Downloading LSPatch from: $LSPATCH_URL"
           wget -O lspatch.jar "$LSPATCH_URL"
 
-          # APKEditor
-          APKEDITOR_URL=$(curl -s https://api.github.com/repos/REAndroid/APKEditor/releases/latest | grep "browser_download_url.*.jar" | cut -d '"' -f 4)
-          wget -O APKEditor.jar "$APKEDITOR_URL"
+          # APKEditor (REAndroid/APKEditor の V1.4.7 で固定)
+          # 動作実績のあるバージョンを使用
+          wget -O APKEditor.jar "https://github.com/REAndroid/APKEditor/releases/download/V1.4.7/APKEditor-1.4.7.jar"
 
       - name: Download APK from Source Repo
         id: download_apk
         env:
-          # Privateリポジトリから落とす場合は secrets.GITHUB_TOKEN を secrets.PAT_TOKEN などに変えてください
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.event.inputs.version }}
         run: |
           echo "Fetching APK for version $VERSION from $SOURCE_REPO..."
           mkdir download_tmp
 
-          # タグ名 (v付き/vなし) の両パターンでダウンロード試行
           if gh release download "v$VERSION" --repo "$SOURCE_REPO" --pattern "*$VERSION*" --dir download_tmp; then
             echo "Downloaded from tag v$VERSION"
           elif gh release download "$VERSION" --repo "$SOURCE_REPO" --pattern "*$VERSION*" --dir download_tmp; then
@@ -94,18 +103,16 @@ jobs:
 
       - name: Run LSPatch (Local Mode)
         run: |
-          # 出力ファイル名はデフォルトで target-lspatched.apk になります
+          # JingMatrix版でもコマンド体系は同じと想定 (-l: Local mode)
           java -jar lspatch.jar target.apk -l -f
 
       - name: Sign APK (Direct)
         run: |
           echo "Signing APK using repository keystore..."
           
-          # Android SDKのapksignerを探す
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
           
-          # 署名実行
           "$APKSIGNER" sign \
             --ks "$KEYSTORE_FILE" \
             --ks-pass pass:"$STORE_PASSWORD" \
