@@ -8,13 +8,11 @@ on:
         required: true
 
 env:
-  # ▼▼▼ 設定エリア ▼▼▼
   SOURCE_REPO: "YuzuMikan404/LINE-APK"
   KEYSTORE_FILE: "keystore.jks"
   STORE_PASSWORD: "your_store_password"
   KEY_ALIAS: "key0"
   KEY_PASSWORD: "your_store_password"
-  # ▲▲▲ 設定エリア終了 ▲▲▲
 
 jobs:
   patch-line:
@@ -31,16 +29,13 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Download Tools (LSPatch & APKEditor)
+      - name: Download Tools
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # JingMatrix/LSPatch から最新の jar と manager.apk を取得
           LATEST_TAG=$(gh release list --repo JingMatrix/LSPatch --limit 1 --json tagName --jq '.[0].tagName')
           gh release download "$LATEST_TAG" --repo JingMatrix/LSPatch --pattern "*.jar" --output "lspatch.jar" --clobber
           gh release download "$LATEST_TAG" --repo JingMatrix/LSPatch --pattern "*.apk" --output "manager.apk" --clobber
-          
-          # APKEditor
           wget -O APKEditor.jar "https://github.com/REAndroid/APKEditor/releases/download/V1.4.7/APKEditor-1.4.7.jar"
 
       - name: Download LINE APK/APKM
@@ -54,9 +49,8 @@ jobs:
           mv "$FILE_PATH" raw_input.file
           echo "ORIGINAL_FILENAME=$(basename "$FILE_PATH")" >> $GITHUB_ENV
 
-      - name: Prepare APK (Merge if APKM)
+      - name: Prepare APK
         run: |
-          # APKMを統合して target.apk を作成
           if unzip -l raw_input.file | grep -q "base.apk"; then
             unzip -o raw_input.file -d splitted_apk
             java -jar APKEditor.jar m -i splitted_apk -o target.apk
@@ -66,21 +60,14 @@ jobs:
 
       - name: Apply LSPatch (Local Mode)
         run: |
-          # 根本解決: --manager manager.apk と --injectdex を併用
           java -Xmx4G -jar lspatch.jar target.apk --manager manager.apk --injectdex -f -o output
-          
-          # 修正: manager-xxx.apk ではなく、target-xxx.apk (LINE) を確実に指定して取り出す
           PATCHED_LINE=$(ls output/target-*-lspatched.apk | head -n 1)
           mv "$PATCHED_LINE" target-patched.apk
 
       - name: Sign APK (Align & Sign)
         run: |
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
-          
-          # zipalign で整列
           "$BUILD_TOOLS_DIR/zipalign" -v -p 4 target-patched.apk target-aligned.apk
-          
-          # apksigner で署名
           "$BUILD_TOOLS_DIR/apksigner" sign \
             --ks "$KEYSTORE_FILE" \
             --ks-pass pass:"$STORE_PASSWORD" \
@@ -89,23 +76,20 @@ jobs:
             --out signed_final.apk \
             target-aligned.apk
 
+      - name: Finalize Filename
+        run: |
+          # アップロード前にランナー上でファイル名を確定させる
+          mv signed_final.apk LINE-${{ github.event.inputs.version }}-LocalRoll.apk
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # タグ名をスマートに
           tag_name: v${{ github.event.inputs.version }}
           name: LINE ${{ github.event.inputs.version }} (Local Roll)
           body: |
             - **Mode:** Local (Manager Applied)
             - **Method:** Roll (Inject Dex)
-          # A:B 形式を使わず、リネーム後のファイル名を直接指定
-          files: signed_final.apk
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Post-Cleanup (Optional)
-        run: |
-          # ファイル名を整理してアップロード（gh release の機能で上書き）
-          gh release upload "v${{ github.event.inputs.version }}" signed_final.apk#LINE-${{ github.event.inputs.version }}-LocalRoll.apk --clobber
+          files: LINE-${{ github.event.inputs.version }}-LocalRoll.apk
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
