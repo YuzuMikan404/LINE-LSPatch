@@ -110,10 +110,12 @@ jobs:
           mv signed_final.apk LINE-${VERSION}-Patched.apk
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2  # v2にアップデートを推奨
         with:
-          tag_name: patched-${{ github.event.inputs.version }}-${{ github.run_id }}
-          name: LINE ${{ github.event.inputs.version }} (Patched)
+          tag_name: ${{ github.event.inputs.version }}
+          name: LINE ${{ github.event.inputs.version }}
           files: LINE-${{ github.event.inputs.version }}-Patched.apk
+          generate_release_notes: true # 変更点などを自動生成
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
