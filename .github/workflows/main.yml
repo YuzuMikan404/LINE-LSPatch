@@ -1,4 +1,4 @@
-name: LSPatch LINE (Local Roll Final)
+name: LSPatch LINE
 
 on:
   workflow_dispatch:
@@ -87,8 +87,8 @@ jobs:
           tag_name: v${{ github.event.inputs.version }}
           name: LINE ${{ github.event.inputs.version }} (Local Roll)
           body: |
-            - **Mode:** Local (Manager Applied)
-            - **Method:** Roll (Inject Dex)
+            - **Mode:** Local
+            - **Method:** Inject Dex
           files: LINE-${{ github.event.inputs.version }}-LocalRoll.apk
           make_latest: true
         env:
