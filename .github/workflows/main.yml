@@ -17,7 +17,7 @@ env:
   # ▲▲▲ 設定エリア終了 ▲▲▲
 
 jobs:
-  patch-jingmatrix:
+  patch-local:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -35,7 +35,6 @@ jobs:
         run: |
           LSPATCH_URL=$(curl -s https://api.github.com/repos/JingMatrix/LSPatch/releases/latest | grep "browser_download_url.*.jar" | head -n 1 | cut -d '"' -f 4)
           wget -O lspatch.jar "$LSPATCH_URL"
-          # APKEditorは最新の安定版を使用
           wget -O APKEditor.jar "https://github.com/REAndroid/APKEditor/releases/download/V1.4.7/APKEditor-1.4.7.jar"
 
       - name: Download APK from Source Repo
@@ -50,7 +49,6 @@ jobs:
           elif gh release download "$VERSION" --repo "$SOURCE_REPO" --pattern "*$VERSION*" --dir download_tmp; then
             echo "Downloaded $VERSION"
           else
-            echo "Release not found."
             exit 1
           fi
           FILE_PATH=$(find download_tmp -type f \( -name "*.apk" -o -name "*.apkm" -o -name "*.xapk" -o -name "*.apks" \) | head -n 1)
@@ -61,37 +59,31 @@ jobs:
         run: |
           FILENAME="${{ env.ORIGINAL_FILENAME }}"
           if [[ "$FILENAME" == *".apkm"* || "$FILENAME" == *".apks"* || "$FILENAME" == *".xapk"* ]]; then
-            echo "Merging Split APK (APKM) into single APK..."
             unzip -o raw_input_file -d splitted_apk
-            # APKEditorでマージ
             java -jar APKEditor.jar m -i splitted_apk -o target.apk
           else
             mv raw_input_file target.apk
           fi
-          if [ ! -f "target.apk" ]; then echo "target.apk not found!"; exit 1; fi
 
-      - name: Run LSPatch (Manager Mode)
+      - name: Run LSPatch (Local Mode)
         run: |
-          # 1. -l を削除 (外部マネージャーを使う場合はManagerモード)
-          # 2. -Xmx4G を追加してJavaのメモリを増やす
-          # 3. 出力を詳細にするため --verbose (あれば) または標準出力を確認
-          java -Xmx4G -jar lspatch.jar target.apk -f -o .
+          # -l フラグを復活させてローカル適応にする
+          # メモリ不足対策で -Xmx4G を付与
+          java -Xmx4G -jar lspatch.jar target.apk -l -f -o .
           
-          echo "--- Directory List After Patching ---"
+          echo "--- Files Check ---"
           ls -F
 
-      - name: Sign APK (Direct)
+      - name: Sign APK
         run: |
-          # LSPatchの出力は [もとの名]-manager-lspatched.apk または [pkg名]-lspatched.apk になる
-          # 確実に拾うため、target.apk 以外の新しくできた apk を探す
+          # 元の target.apk 以外で、新しく生成された apk を探す
           PATCHED_FILE=$(ls *.apk | grep -v "target.apk" | grep -v "lspatch.jar" | grep -v "APKEditor.jar" | head -n 1)
           
           if [ -z "$PATCHED_FILE" ]; then
-            echo "Error: Patched APK not found! Check LSPatch logs above."
+            echo "Error: Patched APK not found!"
             exit 1
           fi
-          
-          echo "Found patched file to sign: $PATCHED_FILE"
+          echo "Patched File: $PATCHED_FILE"
           
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
@@ -104,18 +96,17 @@ jobs:
             --out signed_final.apk \
             "$PATCHED_FILE"
 
-      - name: Rename Output
-        run: |
-          VERSION="${{ github.event.inputs.version }}"
-          mv signed_final.apk LINE-${VERSION}-Patched.apk
-
       - name: Create Release
-        uses: softprops/action-gh-release@v2  # v2にアップデートを推奨
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.version }}
-          name: LINE ${{ github.event.inputs.version }}
-          files: LINE-${{ github.event.inputs.version }}-Patched.apk
-          generate_release_notes: true # 変更点などを自動生成
+          # タグ名をスマートに (例: v15.12.2)
+          tag_name: v${{ github.event.inputs.version }}
+          name: LINE ${{ github.event.inputs.version }} (Local Patched)
+          body: |
+            - Mode: Local (Inject Dex)
+            - Applied via LSPatch (JingMatrix Fork)
+          files: signed_final.apk
+          # 既存のタグがあれば上書き
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
