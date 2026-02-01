@@ -1,4 +1,4 @@
-name: LSPatch LINE
+name: LSPatch LINE (JingMatrix / Java 21)
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ on:
         required: true
 
 env:
-  # ▼▼▼ 設定エリア (ここを書き換えてください) ▼▼▼
+  # ▼▼▼ 設定エリア ▼▼▼
   SOURCE_REPO: "YuzuMikan404/LINE-APK"
   KEYSTORE_FILE: "keystore.jks"
   STORE_PASSWORD: "your_store_password"
@@ -49,6 +49,7 @@ jobs:
           elif gh release download "$VERSION" --repo "$SOURCE_REPO" --pattern "*$VERSION*" --dir download_tmp; then
             echo "Downloaded $VERSION"
           else
+            echo "Release not found."
             exit 1
           fi
           FILE_PATH=$(find download_tmp -type f \( -name "*.apk" -o -name "*.apkm" -o -name "*.xapk" -o -name "*.apks" \) | head -n 1)
@@ -59,28 +60,40 @@ jobs:
         run: |
           FILENAME="${{ env.ORIGINAL_FILENAME }}"
           if [[ "$FILENAME" == *".apkm"* || "$FILENAME" == *".apks"* || "$FILENAME" == *".xapk"* ]]; then
+            echo "Merging Split APK..."
             unzip -o raw_input_file -d splitted_apk
             java -jar APKEditor.jar m -i splitted_apk -o target.apk
           else
             mv raw_input_file target.apk
           fi
+          if [ ! -f "target.apk" ]; then echo "target.apk not found!"; exit 1; fi
 
       - name: Run LSPatch (Local Mode)
         run: |
-          # パッチを当てる。-o . を指定してカレントディレクトリに出力させる
+          # パッチ実行
           java -jar lspatch.jar target.apk -l -f -o .
-          echo "--- Files in current directory ---"
-          ls -l
+          
+          echo "--- Current Directory Files ---"
+          ls -F
 
       - name: Sign APK (Direct)
         run: |
-          # *-lspatched.apk という名前のファイルを自動で探す
-          PATCHED_FILE=$(ls *-lspatched.apk | head -n 1)
+          # 1. まず "*-lspatched.apk" を探す
+          # 2. 見つからない場合は "target.apk" 以外の全ての .apk を候補にする
+          PATCHED_FILE=$(ls *-lspatched.apk 2>/dev/null | head -n 1)
+          
+          if [ -z "$PATCHED_FILE" ]; then
+            echo "Suffix match failed, looking for any new APK..."
+            PATCHED_FILE=$(ls *.apk | grep -v "target.apk" | grep -v "lspatch.jar" | head -n 1)
+          fi
+
           if [ -z "$PATCHED_FILE" ]; then
             echo "Error: Patched APK not found!"
+            ls -R
             exit 1
           fi
-          echo "Found patched file: $PATCHED_FILE"
+          
+          echo "Found patched file to sign: $PATCHED_FILE"
           
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
