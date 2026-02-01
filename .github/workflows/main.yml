@@ -22,7 +22,7 @@ env:
   KEY_ALIAS: "key0"
   
   # 5. キーのパスワード
-  KEY_PASSWORD: "your_key_password"
+  KEY_PASSWORD: "your_store_password"
 
 jobs:
   patch-hardcoded:
