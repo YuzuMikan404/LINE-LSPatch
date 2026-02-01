@@ -4,27 +4,16 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'LINEのバージョン (例: 14.1.1)'
+        description: 'LINEのバージョン (例: 15.12.2)'
         required: true
 
 env:
   # ▼▼▼ 設定エリア (ここを書き換えてください) ▼▼▼
-  
-  # 1. APK(APKM)を置いてある外部リポジトリ (ユーザー名/リポジトリ名)
   SOURCE_REPO: "YuzuMikan404/LINE-APK"
-  
-  # 2. リポジトリに置いたキーストアのファイル名
   KEYSTORE_FILE: "keystore.jks"
-  
-  # 3. キーストアのパスワード
   STORE_PASSWORD: "your_store_password"
-  
-  # 4. キーのエイリアス名
   KEY_ALIAS: "key0"
-  
-  # 5. キーのパスワード
   KEY_PASSWORD: "your_store_password"
-  
   # ▲▲▲ 設定エリア終了 ▲▲▲
 
 jobs:
@@ -44,20 +33,8 @@ jobs:
 
       - name: Download Tools
         run: |
-          # JingMatrix/LSPatch から最新の .jar を取得
-          # APIから "browser_download_url" を検索し、末尾が .jar のものを取得
           LSPATCH_URL=$(curl -s https://api.github.com/repos/JingMatrix/LSPatch/releases/latest | grep "browser_download_url.*.jar" | head -n 1 | cut -d '"' -f 4)
-          
-          if [ -z "$LSPATCH_URL" ]; then
-            echo "Error: Could not find .jar asset in JingMatrix/LSPatch releases."
-            exit 1
-          fi
-          
-          echo "Downloading LSPatch from: $LSPATCH_URL"
           wget -O lspatch.jar "$LSPATCH_URL"
-
-          # APKEditor (REAndroid/APKEditor の V1.4.7 で固定)
-          # 動作実績のあるバージョンを使用
           wget -O APKEditor.jar "https://github.com/REAndroid/APKEditor/releases/download/V1.4.7/APKEditor-1.4.7.jar"
 
       - name: Download APK from Source Repo
@@ -66,49 +43,44 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ github.event.inputs.version }}
         run: |
-          echo "Fetching APK for version $VERSION from $SOURCE_REPO..."
           mkdir download_tmp
-
           if gh release download "v$VERSION" --repo "$SOURCE_REPO" --pattern "*$VERSION*" --dir download_tmp; then
-            echo "Downloaded from tag v$VERSION"
+            echo "Downloaded v$VERSION"
           elif gh release download "$VERSION" --repo "$SOURCE_REPO" --pattern "*$VERSION*" --dir download_tmp; then
-            echo "Downloaded from tag $VERSION"
+            echo "Downloaded $VERSION"
           else
-            echo "Error: Could not find release tag 'v$VERSION' or '$VERSION' in repo '$SOURCE_REPO'."
             exit 1
           fi
-
           FILE_PATH=$(find download_tmp -type f \( -name "*.apk" -o -name "*.apkm" -o -name "*.xapk" -o -name "*.apks" \) | head -n 1)
-          
-          if [ -z "$FILE_PATH" ]; then
-            echo "Error: No matching APK files found."
-            exit 1
-          fi
-          
           mv "$FILE_PATH" raw_input_file
           echo "ORIGINAL_FILENAME=$(basename "$FILE_PATH")" >> $GITHUB_ENV
 
       - name: Prepare APK
         run: |
           FILENAME="${{ env.ORIGINAL_FILENAME }}"
-          
           if [[ "$FILENAME" == *".apkm"* || "$FILENAME" == *".apks"* || "$FILENAME" == *".xapk"* ]]; then
-            echo "--- Split APK detected. Merging... ---"
             unzip -o raw_input_file -d splitted_apk
             java -jar APKEditor.jar m -i splitted_apk -o target.apk
           else
-            echo "--- Standard APK detected. ---"
             mv raw_input_file target.apk
           fi
 
       - name: Run LSPatch (Local Mode)
         run: |
-          # JingMatrix版でもコマンド体系は同じと想定 (-l: Local mode)
-          java -jar lspatch.jar target.apk -l -f
+          # パッチを当てる。-o . を指定してカレントディレクトリに出力させる
+          java -jar lspatch.jar target.apk -l -f -o .
+          echo "--- Files in current directory ---"
+          ls -l
 
       - name: Sign APK (Direct)
         run: |
-          echo "Signing APK using repository keystore..."
+          # *-lspatched.apk という名前のファイルを自動で探す
+          PATCHED_FILE=$(ls *-lspatched.apk | head -n 1)
+          if [ -z "$PATCHED_FILE" ]; then
+            echo "Error: Patched APK not found!"
+            exit 1
+          fi
+          echo "Found patched file: $PATCHED_FILE"
           
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
           APKSIGNER="$BUILD_TOOLS_DIR/apksigner"
@@ -119,7 +91,7 @@ jobs:
             --ks-key-alias "$KEY_ALIAS" \
             --key-pass pass:"$KEY_PASSWORD" \
             --out signed_final.apk \
-            target-lspatched.apk
+            "$PATCHED_FILE"
 
       - name: Rename Output
         run: |
