@@ -65,18 +65,19 @@ jobs:
             mv raw_input_file target.apk
           fi
 
-      - name: Run LSPatch (Local Mode)
+      - name: Run LSPatch (Inject Dex Mode)
         run: |
-          # -l フラグを復活させてローカル適応にする
-          # メモリ不足対策で -Xmx4G を付与
-          java -Xmx4G -jar lspatch.jar target.apk -l -f -o .
+          # JingMatrix版の仕様に合わせて修正
+          # --injectdex: 以前の Local Mode (dex注入)
+          # -f: 強制上書き, -o .: カレントディレクトリ出力
+          java -Xmx4G -jar lspatch.jar target.apk --injectdex -f -o .
           
           echo "--- Files Check ---"
           ls -F
 
       - name: Sign APK
         run: |
-          # 元の target.apk 以外で、新しく生成された apk を探す
+          # パッチ済みのファイルを探す (LSPatchは [パッケージ名]-lspatched.apk 等を出す)
           PATCHED_FILE=$(ls *.apk | grep -v "target.apk" | grep -v "lspatch.jar" | grep -v "APKEditor.jar" | head -n 1)
           
           if [ -z "$PATCHED_FILE" ]; then
@@ -99,14 +100,13 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          # タグ名をスマートに (例: v15.12.2)
           tag_name: v${{ github.event.inputs.version }}
-          name: LINE ${{ github.event.inputs.version }} (Local Patched)
+          name: LINE ${{ github.event.inputs.version }} (Inject Dex)
           body: |
             - Mode: Local (Inject Dex)
-            - Applied via LSPatch (JingMatrix Fork)
+            - Tool: JingMatrix LSPatch
+            - Merged from APKM
           files: signed_final.apk
-          # 既存のタグがあれば上書き
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
