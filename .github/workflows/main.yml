@@ -132,8 +132,12 @@ jobs:
 
       - name: Verify Signature
         run: |
-          jarsigner -verify -keystore "\( {{ env.KEYSTORE_USED }}" -storepass " \){{ env.STORE_PASSWORD }}" signed_final.apk && echo "✅ Signature VALID" || echo "❌ Signature INVALID"
-
+         jarsigner -verify \
+         -keystore "${{ env.KEYSTORE_USED }}" \
+         -storepass "${{ env.STORE_PASSWORD }}" \
+         signed_final.apk \
+         && echo "✅ Signature VALID" || echo "❌ Signature INVALID"
+  
       - name: Finalize Filename
         run: |
           FINAL_NAME="LINE-${{ github.event.inputs.version }}-LSPatch.apk"
