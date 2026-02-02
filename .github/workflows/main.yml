@@ -9,16 +9,17 @@ on:
 
 env:
   SOURCE_REPO: "YuzuMikan404/LINE-APK"
-  KEYSTORE_FILE: "keystore.jks"
-  STORE_PASSWORD: "your_store_password"
+  KEYSTORE_FILE: "keystore.jks"          # リポジトリルートにあるファイル名
+  STORE_PASSWORD: "your_store_password"  # ← 実際のパスワードに変更してください
   KEY_ALIAS: "key0"
-  KEY_PASSWORD: "your_store_password"
+  KEY_PASSWORD: "your_store_password"    # ← 実際のパスワードに変更してください
 
 jobs:
   patch-line:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -29,13 +30,46 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
 
-      - name: Download Tools
+      - name: Prepare Keystore (JKS Direct)
+        run: |
+          echo "Current directory files:"
+          ls -la
+
+          if [ ! -f "${{ env.KEYSTORE_FILE }}" ]; then
+            echo "❌ Keystore file '${{ env.KEYSTORE_FILE }}' not found in root!"
+            exit 1
+          fi
+
+          echo "✅ Keystore found: ${{ env.KEYSTORE_FILE }} (size: $(wc -c < ${{ env.KEYSTORE_FILE }}) bytes)"
+
+          mkdir -p keystore
+          cp "${{ env.KEYSTORE_FILE }}" keystore/keystore.jks
+
+          echo "KEYSTORE_USED=keystore/keystore.jks" >> $GITHUB_ENV
+          echo "STORE_PASSWORD=${{ env.STORE_PASSWORD }}" >> $GITHUB_ENV
+          echo "KEY_ALIAS=${{ env.KEY_ALIAS }}" >> $GITHUB_ENV
+          echo "KEY_PASSWORD=${{ env.KEY_PASSWORD }}" >> $GITHUB_ENV
+
+      - name: Download Latest LSPatch Tools
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          LATEST_TAG=$(gh release list --repo JingMatrix/LSPatch --limit 1 --json tagName --jq '.[0].tagName')
-          gh release download "$LATEST_TAG" --repo JingMatrix/LSPatch --pattern "*.jar" --output "lspatch.jar" --clobber
-          gh release download "$LATEST_TAG" --repo JingMatrix/LSPatch --pattern "*.apk" --output "manager.apk" --clobber
+          LATEST_TAG=$(gh release list --repo JingMatrix/LSPatch --limit 1 --json tagName --jq '.[0].tagName' || echo "v0.7")
+          echo "Latest LSPatch tag: $LATEST_TAG"
+
+          # lspatch.jar
+          gh release download "$LATEST_TAG" --repo JingMatrix/LSPatch --pattern "*lspatch*.jar" --output "lspatch.jar" --clobber
+
+          # manager.apk
+          gh release download "$LATEST_TAG" --repo JingMatrix/LSPatch --pattern "*manager*.apk" --output "manager.apk" --clobber
+
+          if [ ! -f "lspatch.jar" ] || [ ! -f "manager.apk" ]; then
+            echo "❌ Failed to download LSPatch tools"
+            exit 1
+          fi
+
+          echo "✅ LSPatch tools downloaded"
+
           wget -O APKEditor.jar "https://github.com/REAndroid/APKEditor/releases/download/V1.4.7/APKEditor-1.4.7.jar"
 
       - name: Download LINE APK/APKM
@@ -46,6 +80,10 @@ jobs:
           mkdir download_tmp
           gh release download --repo "$SOURCE_REPO" --pattern "*$VERSION*" --dir download_tmp || exit 1
           FILE_PATH=$(find download_tmp -type f \( -name "*.apk" -o -name "*.apkm" -o -name "*.xapk" -o -name "*.apks" \) | head -n 1)
+          if [ -z "$FILE_PATH" ]; then
+            echo "Error: No suitable file found for version $VERSION"
+            exit 1
+          fi
           mv "$FILE_PATH" raw_input.file
           echo "ORIGINAL_FILENAME=$(basename "$FILE_PATH")" >> $GITHUB_ENV
 
@@ -58,38 +96,61 @@ jobs:
             mv raw_input.file target.apk
           fi
 
-      - name: Apply LSPatch (Local Mode)
+      - name: Apply LSPatch
         run: |
-          java -Xmx4G -jar lspatch.jar target.apk --manager manager.apk --injectdex -f -o output
-          PATCHED_LINE=$(ls output/target-*-lspatched.apk | head -n 1)
-          mv "$PATCHED_LINE" target-patched.apk
+          mkdir -p output
+          java -Xmx4G -jar lspatch.jar target.apk \
+            --manager manager.apk \
+            --local \
+            --injectdex \
+            -f \
+            -o output
 
-      - name: Sign APK (Align & Sign)
+          PATCHED_FILE=$(find output -name "*-lspatched.apk" -type f | head -n 1)
+          if [ -n "$PATCHED_FILE" ]; then
+            mv "$PATCHED_FILE" target-patched.apk
+            echo "✅ LSPatch patching completed"
+          else
+            echo "❌ No *-lspatched.apk found"
+            ls -la output
+            exit 1
+          fi
+
+      - name: Align & Sign APK
         run: |
           BUILD_TOOLS_DIR=$(ls -d $ANDROID_HOME/build-tools/* | tail -1)
           "$BUILD_TOOLS_DIR/zipalign" -v -p 4 target-patched.apk target-aligned.apk
           "$BUILD_TOOLS_DIR/apksigner" sign \
-            --ks "$KEYSTORE_FILE" \
-            --ks-pass pass:"$STORE_PASSWORD" \
-            --ks-key-alias "$KEY_ALIAS" \
-            --key-pass pass:"$KEY_PASSWORD" \
+            --ks "${{ env.KEYSTORE_USED }}" \
+            --ks-pass pass:"${{ env.STORE_PASSWORD }}" \
+            --ks-key-alias "${{ env.KEY_ALIAS }}" \
+            --key-pass pass:"${{ env.KEY_PASSWORD }}" \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
             --out signed_final.apk \
             target-aligned.apk
 
+      - name: Verify Signature
+        run: |
+          jarsigner -verify -keystore "\( {{ env.KEYSTORE_USED }}" -storepass " \){{ env.STORE_PASSWORD }}" signed_final.apk && echo "✅ Signature VALID" || echo "❌ Signature INVALID"
+
       - name: Finalize Filename
         run: |
-          # アップロード前にランナー上でファイル名を確定させる
-          mv signed_final.apk LINE-${{ github.event.inputs.version }}-LocalRoll.apk
+          FINAL_NAME="LINE-${{ github.event.inputs.version }}-LSPatch.apk"
+          mv signed_final.apk "$FINAL_NAME"
+          echo "Final APK: $FINAL_NAME"
 
-      - name: Create Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.event.inputs.version }}
-          name: LINE ${{ github.event.inputs.version }} (Local Roll)
+          tag_name: v${{ github.event.inputs.version }}-LSPatch
+          name: LINE ${{ github.event.inputs.version }} - LSPatch
           body: |
-            - **Mode:** Local
-            - **Method:** Inject Dex
-          files: LINE-${{ github.event.inputs.version }}-LocalRoll.apk
+            **Patch Tool:** LSPatch (JingMatrix latest)  
+            **Mode:** Local + InjectDex  
+            **Signature:** Custom JKS keystore from repository root  
+            **Note:** Uses standard LSPatch workflow (may be larger than NPatch)
+          files: LINE-${{ github.event.inputs.version }}-LSPatch.apk
           make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
